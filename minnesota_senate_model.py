@@ -150,6 +150,12 @@ FIRST_BATCH_DISCOUNT = 0.5        # a county's FIRST-EVER nonzero report gets it
                                   # by research, not assumed), so this dampens
                                   # generically rather than assuming a direction.
                                   # Cleared once a second, larger batch arrives.
+FIRST_BATCH_COMPLETENESS_CEILING = 0.60  # if a county's FIRST report already
+                                  # covers this much of its expected turnout, skip
+                                  # the discount entirely -- it's not a small early
+                                  # sample to be cautious about, it's most of the
+                                  # county reporting at once (common for small/
+                                  # rural counties). See update_county().
 
 MAX_SINGLE_COUNTY_SHARE = 0.25    # no single county's own weight can count for
                                   # more than this share of GLOBAL_EVIDENCE_PRIOR
@@ -254,14 +260,32 @@ class MinnesotaSenateModel:
                       pct_reporting: Optional[float]) -> None:
         c = self.counties[name]
         new_counted = int(flanagan_votes or 0) + int(craig_votes or 0)
+        new_completeness = new_counted / c.expected_turnout if c.expected_turnout else 0.0
 
         if c.counted_votes == 0 and new_counted > 0:
-            c.is_first_batch = True       # this county's first-ever nonzero report
+            # This county's first-ever nonzero report -- BUT only flag it for
+            # the extra caution discount if the batch itself is still small.
+            # A small/rural county sometimes posts ~everything in one shot;
+            # without this guard, is_first_batch would never clear (there's
+            # no later "second, larger batch" coming), permanently discounting
+            # a county that's actually done reporting. Confirmed happening in
+            # testing: Cook posting 98% complete in one update stayed stuck at
+            # half credibility forever. Doesn't affect final vote TOTALS
+            # (remaining is ~0 regardless of the rate once a county is this
+            # complete), but it did distort the displayed per-county margin.
+            c.is_first_batch = new_completeness < FIRST_BATCH_COMPLETENESS_CEILING
         elif new_counted > c.counted_votes:
             c.is_first_batch = False      # a real second, larger batch has arrived
 
         c.votes = {"flanagan": int(flanagan_votes or 0), "craig": int(craig_votes or 0)}
-        c.pct_reporting = (pct_reporting or 0.0) / 100.0 if pct_reporting and pct_reporting > 1 else (pct_reporting or 0.0)
+        raw_pct = pct_reporting or 0.0
+        if 0 < raw_pct <= 1:
+            print("WARNING: pct_reporting={} for {} is in the ambiguous (0,1] "
+                  "range -- civicAPI's actual convention (percent like 45.2, or "
+                  "fraction like 0.452) is UNVERIFIED. Currently interpreted as "
+                  "{}%. Check a real payload before trusting this.".format(
+                      raw_pct, name, raw_pct), flush=True)
+        c.pct_reporting = raw_pct / 100.0 if raw_pct > 1 else raw_pct
 
     # ------------------------------------------------------------
     def _recalibrate_turnout(self) -> None:
@@ -497,6 +521,13 @@ class MinnesotaSenateModel:
         grand = totals_fl + totals_cr
         margins = 100 * totals_fl / grand - 100 * totals_cr / grand
 
+        # 99 points (1st through 99th percentile) of the actual simulated
+        # margin distribution -- what app.js's drawDistribution() needs to
+        # draw the curve. Trimmed to 1-99 rather than 0-100 so one extreme
+        # outlier draw out of n_sims doesn't stretch the whole chart's axis.
+        percentile_levels = np.arange(1, 100, 1)
+        margin_percentiles = np.percentile(margins, percentile_levels)
+
         return {
             "n_sims": n_sims,
             "mean_margin": float(np.mean(margins)),
@@ -506,6 +537,7 @@ class MinnesotaSenateModel:
             "p90": float(np.percentile(margins, 90)), "p95": float(np.percentile(margins, 95)),
             "flanagan_win_prob": float(np.mean(margins > 0)),
             "craig_win_prob": float(np.mean(margins < 0)),
+            "margin_percentiles": [round(float(x), 3) for x in margin_percentiles],
         }
 
 

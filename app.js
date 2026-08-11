@@ -105,6 +105,13 @@ function drawDistribution(p) {
     `<span>${signed(d.lo)}</span>` +
     `<span>${p.median_margin >= 0 ? FLANAGAN : CRAIG} margin</span>` +
     `<span>${signed(d.hi)}</span>`;
+
+  // Numeric ranges on the key itself, not just the color swatches -- the
+  // middle 50% and middle 90% of simulated outcomes, as actual numbers.
+  $("dist-key").innerHTML =
+    `<span><i class="swatch band-90"></i>Middle 90%: ${signed(p.interval_90[0])} to ${signed(p.interval_90[1])}</span>` +
+    `<span><i class="swatch band-50"></i>Middle 50%: ${signed(p.interval_50[0])} to ${signed(p.interval_50[1])}</span>` +
+    `<span><i class="swatch tick-zero"></i>tie</span>`;
 }
 
 
