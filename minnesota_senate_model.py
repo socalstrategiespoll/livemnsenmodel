@@ -2,33 +2,42 @@
 Minnesota US Senate Democratic Primary -- live county-level model.
 Angie Craig vs. Peggy Flanagan, two-candidate (per Wilson's instruction).
 
-NOT DEDUCTIVE. This is the one deliberate architectural break from the
-Michigan/Wisconsin/South Dakota template family, per Wilson's explicit
-instruction: "not as deductive... blend projections with current results
-unless there is a consistent pattern that projections are off and then use
-current results in that case."
+NOT DEDUCTIVE IN HOW THE REMAINDER IS RATED -- BUT COUNTED VOTES ARE STILL
+FIXED. This is a narrower break from the Michigan/Wisconsin/South Dakota
+template family than an earlier version of this file implemented, per
+Wilson's explicit instruction: "not as deductive... blend projections with
+current results unless there is a consistent pattern that projections are
+off and then use current results in that case" -- and a follow-up correction
+after Wilson caught that an earlier version had taken that too far and let
+the model report FEWER votes for a candidate than had already been counted
+for them.
 
-WHAT "DEDUCTIVE" MEANS AND WHY THIS ISN'T THAT
+WHAT'S ACTUALLY DIFFERENT FROM THE WI/SD/GA TEMPLATE
 
-The WI/SD/GA template holds a county's counted votes as literal, unconditional
-truth and only models the UNCOUNTED remainder:
-    projected_votes = counted_votes + remaining_votes * blended_rate
-That's correct when you trust every partial batch that comes in as an
-unbiased (if incomplete) sample -- Wisconsin's counties report in no
-consistent order, so there's no reason to distrust an early batch's rate,
-only its completeness.
+Every one of those models, and this one, adds up a county the same basic way:
+    projected_votes = counted_votes + remaining_votes * rate_for_the_remainder
+Counted votes are ground truth in both. What differs is only how
+`rate_for_the_remainder` gets picked.
 
-Wilson's instruction here is different: trust the BASELINE too, not just
-completeness-weighted counted votes. So instead of "counted + blended
-remainder", every county's full projected result is:
-    projected_votes = effective_turnout * blended_share
-where blended_share comes from a credibility-weighted average of the
-county's OWN observed margin and its (shift-adjusted) baseline margin --
-credibility grows with how much of the county has reported, same shape as
-the WI template's `credibility` property, but it's now applied to the WHOLE
-county's projection, not just the leftover votes. A raw early batch that
-disagrees hard with the baseline pulls the projection only partway, not all
-the way -- proportional to how much of the county is actually in.
+WI/SD/GA: the rate is a credibility-weighted blend of the county's OWN
+observed rate and completeness -- it doesn't lean on a baseline at all beyond
+using it as a prior when a county has barely reported.
+
+THIS MODEL: the rate is `project_margin()`'s blend of the county's own
+observed margin against a (shift-adjusted) BASELINE margin, credibility-
+weighted the same way -- see WHY BASELINE TRUST IS THE RIGHT DEFAULT HERE
+below. A raw early batch that disagrees hard with the baseline pulls the
+RATE applied to the remainder only partway toward itself, not all the way --
+proportional to how much of the county is actually in. That's the entire
+"not deductive" difference: which rate estimates the leftover votes. It was
+never license to revise the counted votes themselves, and an earlier version
+of this file that applied the blended margin to a county's WHOLE turnout
+(counted votes included) was wrong -- confirmed producing an actual
+under-count for a candidate's own tallied votes in ~7% of a randomized
+stress test, worst at HIGH reporting where it should be least likely. Fixed
+in project() and run_simulation(): counted votes are now added back
+unchanged every time, only `remaining = effective_turnout - counted_votes`
+ever gets multiplied by a modeled rate.
 
 THE "CONSISTENT PATTERN" ESCAPE HATCH
 
@@ -42,11 +51,12 @@ the same directional surprise, the shift converges toward that surprise's
 full size, and gets folded into every county's baseline before the
 observed/baseline blend even happens. So a confirmed statewide pattern
 doesn't just nudge the model, it silently re-centers the "baseline" every
-county's own results get blended against, county-by-county evidence on top of
-that. A MOMENTUM constraint additionally hard-clamps a well-reported county's
-projection to within MOMENTUM_MAX_DRIFT points of its own observed margin
-once it clears MOMENTUM_TRIGGER_PCT reporting, so a strong true county-level
-signal can never be blended away entirely by a stale baseline.
+county's own results get blended against for its remainder, county-by-county
+evidence on top of that. A MOMENTUM constraint additionally hard-clamps a
+well-reported county's blended RATE to within MOMENTUM_MAX_DRIFT points of
+its own observed margin once it clears MOMENTUM_TRIGGER_PCT reporting, so a
+strong true county-level signal can never be blended away entirely by a
+stale baseline.
 
 WHY BASELINE TRUST IS THE RIGHT DEFAULT HERE
 
@@ -54,8 +64,8 @@ Wilson's basis for this call: the MN baseline (minnesota_governor_model.py)
 isn't a rough guess -- it's built from an actual crowd-prediction map read
 pixel-by-pixel into a 10-step confidence tier per county, plus a 2020
 Sanders/Warren coalition-shape covariate, both real signals rather than
-placeholders. That's worth defending against a noisy early batch in a way a
-placeholder baseline wouldn't be.
+placeholders. That's worth defending against a noisy early batch, for the
+REMAINDER, in a way a placeholder baseline wouldn't be.
 """
 
 import math
@@ -382,8 +392,20 @@ class MinnesotaSenateModel:
     # ------------------------------------------------------------
     def project(self) -> Dict:
         """Full projection cycle: recalibrate turnout, recompute shifts, then
-        allocate EVERY county's full effective turnout via its blended
-        margin (not counted-plus-remainder -- see module docstring)."""
+        allocate each county as COUNTED VOTES (held exactly fixed, never
+        revised) PLUS the uncounted remainder at the blended margin.
+
+        This was wrong in an earlier version of this file: it applied the
+        blended margin to a county's WHOLE effective turnout, counted votes
+        included, which meant the model's own "final" projection could
+        report FEWER votes for a candidate than had already been tallied for
+        them once real votes existed -- confirmed happening in ~7% of a
+        randomized stress test, worse at HIGH reporting (95%+) where it
+        matters most. Counted votes are ground truth, full stop, regardless
+        of how much or little the model trusts the RATE they imply for
+        projecting what's left. 'Not deductive' (see module docstring) is
+        about how the credibility-weighted blend picks the rate for the
+        remainder -- not license to let the model overwrite real ballots."""
         self._recalibrate_turnout()
         self._recompute_shifts()
 
@@ -392,9 +414,9 @@ class MinnesotaSenateModel:
         n_reported = 0
         for c in self.counties.values():
             margin = self.project_margin(c)
-            turnout = c.effective_turnout
-            flanagan_total += turnout * (50 + margin / 2) / 100
-            craig_total += turnout * (50 - margin / 2) / 100
+            remaining = max(0.0, c.effective_turnout - c.counted_votes)
+            flanagan_total += c.votes["flanagan"] + remaining * (50 + margin / 2) / 100
+            craig_total += c.votes["craig"] + remaining * (50 - margin / 2) / 100
             counted_flanagan += c.votes["flanagan"]
             counted_craig += c.votes["craig"]
             if c.counted_votes > 0:
@@ -425,7 +447,10 @@ class MinnesotaSenateModel:
         """Vectorized Monte Carlo around the blended point projection. Per-
         county noise shrinks with credibility (a well-blended county is
         already anchored near its true result); a shared statewide shock
-        reflects how uncertain the shift estimate itself still is."""
+        reflects how uncertain the shift estimate itself still is.
+
+        Same fix as project(): counted votes are added back UNCHANGED every
+        draw, noise only ever applies to the uncounted remainder."""
         self._recalibrate_turnout()
         self._recompute_shifts()
 
@@ -438,6 +463,9 @@ class MinnesotaSenateModel:
         eff_turnout = np.array([c.effective_turnout for c in counties])
         point_margin = np.array([self.project_margin(c) for c in counties])
         pct_counted = np.array([c.pct_counted for c in counties])
+        counted_fl = np.array([c.votes["flanagan"] for c in counties], dtype=float)
+        counted_cr = np.array([c.votes["craig"] for c in counties], dtype=float)
+        remaining = np.maximum(0.0, eff_turnout - (counted_fl + counted_cr))
 
         base_sd = 8.0
         county_sd = base_sd * (1 - cred) ** 0.5 + heterog * (1 - cred) * 0.3
@@ -462,8 +490,8 @@ class MinnesotaSenateModel:
         sim_margin = np.where(momentum_active[None, :], clipped, sim_margin)
         sim_margin = np.clip(sim_margin, -60.0, 60.0)
 
-        flanagan_votes = eff_turnout[None, :] * (50 + sim_margin / 2) / 100
-        craig_votes = eff_turnout[None, :] - flanagan_votes
+        flanagan_votes = counted_fl[None, :] + remaining[None, :] * (50 + sim_margin / 2) / 100
+        craig_votes = counted_cr[None, :] + remaining[None, :] * (50 - sim_margin / 2) / 100
         totals_fl = flanagan_votes.sum(axis=1)
         totals_cr = craig_votes.sum(axis=1)
         grand = totals_fl + totals_cr
