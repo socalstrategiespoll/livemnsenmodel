@@ -121,14 +121,14 @@ function drawDistribution(p) {
 // Real GeoJSON in lat/lon, projected in-browser with an Albers conic tuned to
 // Minnesota (roughly 43.5N-49.4N, -97.2 to -89.5).
 //
-// NOT a deductive model, so the two maps don't mean "counted" vs. "remaining
-// vote" the way MI/WI's do -- there's no separate remainder margin, because
-// this model doesn't hold counted votes fixed and only project the leftover.
-// Instead: COUNTED shows the raw, unmodeled margin in whatever's actually
-// been tallied so far (grey where nothing has); MODEL PROJECTION shows the
-// full county's credibility-blended projection (see
-// minnesota_senate_model.py), which exists for every county from the first
-// cycle on, since it starts from the pre-election baseline.
+// Counted votes are always held fixed here too -- what varies between the two
+// maps is only how the UNCOUNTED remainder gets rated. COUNTED shows the raw,
+// unmodeled margin in whatever's actually been tallied so far (grey where
+// nothing has); MODEL PROJECTION shows counted votes plus the remainder
+// projected at a credibility-weighted blended rate (see
+// minnesota_senate_model.py's project_margin()), which exists for every
+// county from the first cycle on, since the remainder starts from the
+// pre-election baseline before any votes are in.
 // ---------------------------------------------------------------------------
 
 const MAP_W = 620;
@@ -331,10 +331,11 @@ function paintDetail(county) {
       ${r.calibrated_turnout && r.calibrated_turnout !== r.projected_total
         ? `Turnout here is now projected at ${num.format(r.calibrated_turnout)}, revised from the pre-election baseline based on this county's own reporting pace.`
         : `Turnout still running on the pre-election baseline projection.`}
-      This isn't a deductive model -- the projection blends this county's own
-      results with the baseline at a weight (credibility) that grows with how
-      much of the county has reported, and shifts further toward observed
-      results if many other counties are showing the same pattern.
+      Counted votes are always held fixed. Only the uncounted remainder is
+      modeled -- blended between this county's own results so far and the
+      baseline at a weight (credibility) that grows with how much of the
+      county has reported, and shifts further toward observed results if
+      many other counties are showing the same pattern.
     </p>`;
 }
 

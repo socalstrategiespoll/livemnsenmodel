@@ -176,11 +176,13 @@
     <div class="panel">
       <h2>Model state</h2>
       <p class="panel-note">
-        This model is NOT deductive: it doesn't hold counted votes fixed and
-        project only the remainder. Every county's projection blends its own
-        results with the baseline at a credibility weight that grows with how
-        much has reported -- and shifts further toward observed results when
-        many counties show the same pattern, not just one.
+        Counted votes are always held fixed -- the model never revises a
+        vote that's actually been tallied. What it doesn't take on faith is
+        the RATE for whatever hasn't been counted yet: a county's uncounted
+        remainder is projected from a credibility-weighted blend of that
+        county's own results so far and the pre-election baseline, shifting
+        further toward observed results as more of the county reports, and
+        faster still when many counties show the same pattern, not just one.
       </p>
       <dl class="diag">
         <dt>Counties reporting</dt><dd id="d-counties">—</dd>

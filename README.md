@@ -20,15 +20,19 @@ run, which wipes the turnout-calibration and shift state the model accumulates o
 the night, and it has no URL for a site to read. The web service solves both by
 staying alive.
 
-## This model is NOT deductive
+## Counted votes are held fixed -- what's "not deductive" is narrower than that
 
 The Michigan/Wisconsin/South Dakota family of models holds a county's counted votes
-as literal fixed truth and only projects the uncounted remainder. This model does
-something different, on purpose: every county's full projection is a
-credibility-weighted **blend** of its own observed results and a (shift-adjusted)
-baseline, where credibility grows with how much of the county has actually reported.
-A small early batch that disagrees with the baseline pulls the projection only
-partway toward itself, not all the way.
+as literal fixed truth and only projects the uncounted remainder:
+`projected_votes = counted_votes + remaining_votes * rate`. This model does that
+too -- counted votes are never revised, full stop. What's different is only how
+`rate` gets picked for the remainder: instead of trusting the county's own observed
+rate alone (weighted by completeness), it's a credibility-weighted **blend** of the
+county's own observed rate and a (shift-adjusted) baseline rate, where credibility
+grows with how much of the county has actually reported. A small early batch that
+disagrees with the baseline pulls the RATE FOR THE REMAINDER only partway toward
+itself, not all the way -- it can never pull down a vote that's already been
+counted.
 
 The escape hatch is the statewide/regional shift layer: if **many** counties —
 not just one, however large — show the same directional surprise against their
