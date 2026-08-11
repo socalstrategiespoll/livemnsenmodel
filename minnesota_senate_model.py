@@ -68,7 +68,9 @@ import pandas as pd
 CANDIDATES = ("flanagan", "craig")
 
 BASELINE_PATH = "mn_county_baseline.csv"
-TARGET_TURNOUT = 500_000
+TARGET_TURNOUT = 680_000  # documentation only -- actual turnout is read
+                          # per-county from BASELINE_PATH at model init, not
+                          # recomputed from this constant
 
 # ------------------------------------------------------------------
 # Regions -- media-market-ish groupings of MN's 87 counties, used only for
