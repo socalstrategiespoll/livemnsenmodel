@@ -116,8 +116,28 @@ N_SIMS = 20000
 TURNOUT_FULL_TRUST_PCT = 25.0
 TURNOUT_CLAMP = (0.40, 2.50)
 
-MOMENTUM_TRIGGER_PCT = 0.30
+MOMENTUM_TRIGGER_PCT = 0.35        # raised from 0.30 -- Minnesota counties often
+                                   # post their pre-scanned absentee batch as one
+                                   # lump right after 8pm, so a county sitting at
+                                   # 30% in could still be almost entirely that
+                                   # one mode-skewed batch, not a random sample.
+                                   # A few extra points buys time for at least
+                                   # some Election Day votes to be mixed in
+                                   # before raw results can hard-clamp the model
 MOMENTUM_MAX_DRIFT = 10.0
+
+FIRST_BATCH_DISCOUNT = 0.5        # a county's FIRST-EVER nonzero report gets its
+                                  # credibility cut in half, on top of the normal
+                                  # pct_counted curve. Minnesota's absentee ballots
+                                  # are pre-scanned before election day but held
+                                  # until 8pm, so a county's first posted batch is
+                                  # disproportionately likely to BE that absentee
+                                  # batch specifically, not a random draw across
+                                  # vote types -- and which mode reports first
+                                  # varies by county with no fixed rule (confirmed
+                                  # by research, not assumed), so this dampens
+                                  # generically rather than assuming a direction.
+                                  # Cleared once a second, larger batch arrives.
 
 MAX_SINGLE_COUNTY_SHARE = 0.25    # no single county's own weight can count for
                                   # more than this share of GLOBAL_EVIDENCE_PRIOR
@@ -150,6 +170,8 @@ class CountyState:
     calibrated_turnout: Optional[float] = None
     pct_reporting: float = 0.0      # PRECINCT reporting -- diagnostic only, not completeness
     votes: Dict[str, int] = field(default_factory=lambda: {"flanagan": 0, "craig": 0})
+    is_first_batch: bool = False    # True only for this county's first-ever
+                                    # nonzero report -- see FIRST_BATCH_DISCOUNT
 
     @property
     def effective_turnout(self) -> float:
@@ -183,14 +205,19 @@ class CountyState:
         """How much weight the county's OWN observed margin gets against the
         (shift-adjusted) baseline -- grows with how much of the county's
         effective turnout has actually been counted, same curve shape as the
-        WI template, penalized for big/heterogeneous counties early on."""
+        WI template, penalized for big/heterogeneous counties early on, and
+        further discounted while this is still the county's first-ever batch
+        (see FIRST_BATCH_DISCOUNT)."""
         p = self.pct_counted
         if p <= 0:
             return 0.0
         completeness_weight = p ** (1 / CREDIBILITY_EXPONENT)
         design_var = (self.heterogeneity ** 2) * (1 - p)
         noise_penalty = 1.0 / (1.0 + design_var / 50.0)
-        return min(0.995, completeness_weight * noise_penalty)
+        cred = completeness_weight * noise_penalty
+        if self.is_first_batch:
+            cred *= FIRST_BATCH_DISCOUNT
+        return min(0.995, cred)
 
 
 class MinnesotaSenateModel:
@@ -214,6 +241,13 @@ class MinnesotaSenateModel:
     def update_county(self, name: str, flanagan_votes: int, craig_votes: int,
                       pct_reporting: Optional[float]) -> None:
         c = self.counties[name]
+        new_counted = int(flanagan_votes or 0) + int(craig_votes or 0)
+
+        if c.counted_votes == 0 and new_counted > 0:
+            c.is_first_batch = True       # this county's first-ever nonzero report
+        elif new_counted > c.counted_votes:
+            c.is_first_batch = False      # a real second, larger batch has arrived
+
         c.votes = {"flanagan": int(flanagan_votes or 0), "craig": int(craig_votes or 0)}
         c.pct_reporting = (pct_reporting or 0.0) / 100.0 if pct_reporting and pct_reporting > 1 else (pct_reporting or 0.0)
 

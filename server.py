@@ -160,6 +160,7 @@ def build_county_table(model: MinnesotaSenateModel) -> list:
             "expected_baseline": round(c.baseline_margin, 1),
             "vs_expected": None if raw_margin is None else round(raw_margin - c.baseline_margin, 1),
             "credibility": round(c.credibility, 3),
+            "first_batch": c.is_first_batch,
             "pct_precincts": round(c.pct_reporting * 100, 1) if c.pct_reporting else None,
             "pct_of_projected": round(100 * c.pct_counted, 1),
             "projected_total": int(c.effective_turnout),
@@ -180,7 +181,7 @@ def save_state(model: MinnesotaSenateModel) -> None:
         snap = {
             name: {
                 "flanagan": c.votes["flanagan"], "craig": c.votes["craig"],
-                "pct_reporting": c.pct_reporting,
+                "pct_reporting": c.pct_reporting, "is_first_batch": c.is_first_batch,
             }
             for name, c in model.counties.items() if c.counted_votes > 0
         }
@@ -200,6 +201,10 @@ def load_state(model: MinnesotaSenateModel) -> None:
         for name, rec in stored.items():
             if name in model.counties:
                 model.update_county(name, rec["flanagan"], rec["craig"], rec["pct_reporting"])
+                # update_county infers is_first_batch from the 0->nonzero
+                # transition, which a restore skips (counted_votes starts at 0
+                # either way) -- restore the actual saved flag afterward.
+                model.counties[name].is_first_batch = rec.get("is_first_batch", False)
         print("restored {} counties from {}".format(len(stored), path), flush=True)
     except Exception:
         pass
