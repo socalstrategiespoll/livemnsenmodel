@@ -497,21 +497,44 @@ class MinnesotaSenateModel:
 
         evidence_shrink = self.total_evidence_weight / (self.total_evidence_weight + GLOBAL_EVIDENCE_PRIOR)
         prior_sd = PRE_ELECTION_MARGIN_SD * (1 - evidence_shrink)
-        statewide_sd = math.sqrt(self.statewide_shift_var) * 15.0
-        statewide_sd = math.sqrt(statewide_sd ** 2 + prior_sd ** 2)
+        # Shift uncertainty as a real posterior variance, not a raw between-
+        # county dispersion inflated by an arbitrary constant. This was the
+        # actual bug behind the "spike at both edges, plateau in the middle"
+        # chart Wilson caught: the old `sqrt(statewide_shift_var) * 15.0` added
+        # 40+ points of SHARED (fully correlated across every county) shock
+        # regardless of how much evidence had accumulated -- confirmed still
+        # injecting ~44 points of shared SD at 66% evidence-weight already in.
+        # A shared shock that large pushes many counties past their momentum
+        # clip AT ONCE on extreme draws, piling up simulated outcomes right at
+        # the clip boundary instead of tapering off like a real tail should.
+        # Fix: shrink the shift's own uncertainty by the same evidence
+        # fraction that already shrinks its point estimate -- tau2 (the raw
+        # between-county variance) is the right SCALE when there's no
+        # evidence, and should shrink toward 0 as evidence accumulates, same
+        # as the shift estimate itself.
+        shift_posterior_var = self.statewide_shift_var * (1 - evidence_shrink)
+        statewide_sd = math.sqrt(shift_posterior_var + prior_sd ** 2)
 
         obs_arr = np.array([(c.observed_margin if c.observed_margin is not None else 0.0)
                             for c in counties])
         momentum_active = pct_counted >= MOMENTUM_TRIGGER_PCT
-        lo_bound = obs_arr - MOMENTUM_MAX_DRIFT
-        hi_bound = obs_arr + MOMENTUM_MAX_DRIFT
 
         shared_shock = rng.normal(0, statewide_sd, size=(n_sims, 1))
         county_shock = rng.normal(0, 1, size=(n_sims, n)) * county_sd[None, :]
         sim_margin = point_margin[None, :] + shared_shock + county_shock
 
-        clipped = np.clip(sim_margin, lo_bound[None, :], hi_bound[None, :])
-        sim_margin = np.where(momentum_active[None, :], clipped, sim_margin)
+        # Soft momentum bound instead of a hard np.clip. A hard clip converts
+        # every draw beyond the boundary into a literal point mass exactly AT
+        # the boundary -- harmless for one county in isolation, but once many
+        # counties clip on the same extreme (correlated) draws, those point
+        # masses stack up in the statewide aggregate into a visible spike.
+        # tanh squashes smoothly instead: draws near the observed margin pass
+        # through almost unchanged, draws far past the drift limit compress
+        # toward it asymptotically rather than piling up exactly on it.
+        drift = sim_margin - obs_arr[None, :]
+        squashed_drift = MOMENTUM_MAX_DRIFT * np.tanh(drift / MOMENTUM_MAX_DRIFT)
+        softened = obs_arr[None, :] + squashed_drift
+        sim_margin = np.where(momentum_active[None, :], softened, sim_margin)
         sim_margin = np.clip(sim_margin, -60.0, 60.0)
 
         flanagan_votes = counted_fl[None, :] + remaining[None, :] * (50 + sim_margin / 2) / 100
